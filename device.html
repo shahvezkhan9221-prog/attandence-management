@@ -1,0 +1,212 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLA Terminal | Smart Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { background-color: #020617; font-family: 'Inter', sans-serif; }
+        .scanner-view { transform: scaleX(-1); }
+        .scan-line {
+            position: absolute;
+            width: 100%;
+            height: 4px;
+            background: linear-gradient(to bottom, transparent, #22c55e);
+            box-shadow: 0 0 15px #22c55e;
+            animation: moveScan 2.5s linear infinite;
+        }
+        @keyframes moveScan {
+            0% { top: 0%; }
+            100% { top: 100%; }
+        }
+    </style>
+</head>
+<body class="text-white min-h-screen flex flex-col">
+
+    <header class="bg-[#0f172a] border-b border-slate-800 p-5 flex justify-between items-center shadow-lg">
+        <div>
+            <h1 class="text-2xl font-black text-green-500 tracking-tighter">GLA TERMINAL v2.0</h1>
+            <p id="liveClock" class="text-xs text-slate-400 font-mono"></p>
+        </div>
+        <div id="statusBadge" class="bg-red-500/20 text-red-500 px-4 py-2 rounded-full text-xs font-bold border border-red-500/30">
+            SYSTEM STANDBY
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col lg:flex-row items-center justify-center gap-12 p-8">
+        
+        <div class="relative w-full max-w-2xl bg-slate-900 rounded-[2.5rem] overflow-hidden border-8 border-slate-800 shadow-[0_0_50px_rgba(0,0,0,0.5)] aspect-video">
+            <video id="video" autoplay muted class="scanner-view w-full h-full object-cover"></video>
+            <canvas id="overlay" class="absolute inset-0"></canvas>
+            <div id="scannerLine" class="scan-line hidden"></div>
+            
+            <div id="attendanceAlert" class="absolute inset-x-0 top-10 flex justify-center hidden translate-y-[-20px] transition-all">
+                <div class="bg-green-600 text-white px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-3 border-2 border-green-400">
+                    <span class="text-2xl">✅</span>
+                    <div>
+                        <p class="text-xs uppercase font-bold opacity-80">Attendance Marked</p>
+                        <p id="studentNameDisplay" class="text-xl font-black">Student Name</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="w-full max-w-md space-y-6 text-center lg:text-left">
+            <div class="bg-slate-900/50 p-8 rounded-3xl border border-slate-800">
+                <p class="text-green-500 text-sm font-bold uppercase tracking-[0.2em] mb-2">Current Activity</p>
+                <h2 id="activeSubject" class="text-4xl font-black mb-4">No Active Class</h2>
+                <div id="classDetails" class="space-y-2 text-slate-400 hidden">
+                    <p class="flex items-center gap-2">🕒 <span id="classTimeRange">10:00 - 11:00</span></p>
+                    <p class="flex items-center gap-2">📅 <span id="classDateDisplay">01 Feb 2026</span></p>
+                </div>
+            </div>
+            <p id="instructionText" class="text-slate-500 italic text-sm">Waiting for a scheduled class to start...</p>
+        </div>
+
+    </main>
+
+    <script type="module">
+        const SUPABASE_URL = 'https://fgftcqpeylybltodifyq.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZnZnRjcXBleWx5Ymx0b2RpZnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NDE5NTMsImV4cCI6MjA4NTUxNzk1M30.gtNRDS3sXTalzGBMheR0E6rXqQsaODUnWEQdDEBDcBQ';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const video = document.getElementById('video');
+        const activeSubject = document.getElementById('activeSubject');
+        const statusBadge = document.getElementById('statusBadge');
+        const instructionText = document.getElementById('instructionText');
+
+        let currentActiveId = null;
+        let knownFaces = [];
+        let isProcessing = false;
+
+        // 1. Initialize
+        async function setup() {
+            try {
+                const MODEL_URL = './models';
+                await Promise.all([
+                    faceapi.nets.tinyFaceDetector.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceLandmark68Net.loadFromUri(MODEL_URL),
+                    faceapi.nets.faceRecognitionNet.loadFromUri(MODEL_URL)
+                ]);
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+                
+                fetchStudents(); // Load existing students
+                checkSchedule(); // Initial check
+                setInterval(checkSchedule, 15000); // Check schedule every 15s
+                startScanning(); 
+            } catch (err) {
+                console.error("Setup Error:", err);
+                instructionText.innerText = "Error initializing system.";
+            }
+        }
+
+        // 2. Load Student Profiles
+        async function fetchStudents() {
+            const { data, error } = await supabaseClient.from('profiles').select('*');
+            if (data) knownFaces = data;
+        }
+
+        // 3. Match Live Time with DB
+        async function checkSchedule() {
+            const now = new Date();
+            const time = now.toTimeString().split(' ')[0];
+            const date = now.toISOString().split('T')[0];
+
+            const { data, error } = await supabaseClient
+                .from('classes')
+                .select('*')
+                .eq('class_date', date)
+                .lte('start_time', time)
+                .gte('end_time', time)
+                .maybeSingle();
+
+            if (data) {
+                currentActiveId = data.id;
+                activeSubject.innerText = data.subject;
+                document.getElementById('classTimeRange').innerText = `${data.start_time} - ${data.end_time}`;
+                document.getElementById('classDateDisplay').innerText = data.class_date;
+                document.getElementById('classDetails').classList.remove('hidden');
+                document.getElementById('scannerLine').classList.remove('hidden');
+                statusBadge.innerText = "LIVE SCANNING ACTIVE";
+                statusBadge.className = "bg-green-500/20 text-green-500 px-4 py-2 rounded-full text-xs font-bold border border-green-500/30";
+                instructionText.innerText = "Please position your face within the frame.";
+            } else {
+                currentActiveId = null;
+                activeSubject.innerText = "No Active Class";
+                document.getElementById('classDetails').classList.add('hidden');
+                document.getElementById('scannerLine').classList.add('hidden');
+                statusBadge.innerText = "SYSTEM STANDBY";
+                statusBadge.className = "bg-red-500/20 text-red-500 px-4 py-2 rounded-full text-xs font-bold border border-red-500/30";
+            }
+        }
+
+        // 4. Face Recognition Loop
+        async function startScanning() {
+            if (currentActiveId && !isProcessing) {
+                const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions())
+                                            .withFaceLandmarks()
+                                            .withFaceDescriptor();
+
+                if (detection) {
+                    for (let student of knownFaces) {
+                        const distance = faceapi.euclideanDistance(detection.descriptor, new Float32Array(student.face_data));
+                        
+                        if (distance < 0.45) { // Confidence Threshold
+                            markAttendance(student);
+                            break;
+                        }
+                    }
+                }
+            }
+            requestAnimationFrame(startScanning);
+        }
+
+        // 5. Submit to Supabase
+        async function markAttendance(student) {
+            isProcessing = true;
+            
+            // First check if already marked for this class
+            const { data: existing } = await supabaseClient
+                .from('attendance')
+                .select('*')
+                .eq('student_id', student.id)
+                .eq('class_id', currentActiveId)
+                .maybeSingle();
+
+            if (!existing) {
+                const { error } = await supabaseClient
+                    .from('attendance')
+                    .insert([{ student_id: student.id, class_id: currentActiveId }]);
+
+                if (!error) {
+                    showSuccess(student.name);
+                }
+            } else {
+                console.log("Already marked!");
+                setTimeout(() => { isProcessing = false; }, 3000);
+            }
+        }
+
+        function showSuccess(name) {
+            const alertBox = document.getElementById('attendanceAlert');
+            document.getElementById('studentNameDisplay').innerText = name;
+            alertBox.classList.remove('hidden');
+            setTimeout(() => {
+                alertBox.classList.add('hidden');
+                isProcessing = false;
+            }, 4000);
+        }
+
+        setInterval(() => {
+            document.getElementById('liveClock').innerText = new Date().toLocaleString();
+        }, 1000);
+
+        setup();
+    </script>
+</body>
+</html>

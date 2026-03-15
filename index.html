@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GLA Admin | Smart Attendance</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <script src="https://cdn.jsdelivr.net/npm/face-api.js@0.22.2/dist/face-api.min.js"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; background-color: #0f172a; }
+        .video-flip { transform: scaleX(-1); border-radius: 1rem; }
+    </style>
+</head>
+<body class="text-slate-200 min-h-screen">
+
+    <nav class="border-b border-slate-800 bg-[#1e293b] p-4 sticky top-0 z-50">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-xl font-bold text-blue-400">GLA University <span class="text-white font-light text-sm">| Admin</span></h1>
+            <div id="status" class="text-xs font-bold px-3 py-1 rounded-full bg-yellow-500/20 text-yellow-500 animate-pulse">
+                INITIALIZING AI...
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto p-6 grid grid-cols-1 lg:grid-cols-2 gap-8">
+        
+        <div class="bg-[#1e293b] p-6 rounded-3xl border border-slate-700 shadow-xl">
+            <h2 class="text-lg font-bold mb-4 text-blue-300 italic tracking-wider">01. STUDENT ENROLLMENT</h2>
+            <div class="grid grid-cols-2 gap-3 mb-4">
+                <input type="text" id="name" placeholder="Full Name" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none focus:border-blue-500">
+                <input type="text" id="roll" placeholder="Roll Number" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none focus:border-blue-500">
+                <input type="text" id="branch" placeholder="Branch (e.g. BTech CSE)" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none focus:border-blue-500">
+                <input type="text" id="sem" placeholder="Semester" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none focus:border-blue-500">
+            </div>
+
+            <div class="relative bg-black rounded-2xl overflow-hidden aspect-video mb-4 border-2 border-slate-700">
+                <video id="video" autoplay muted class="video-flip w-full h-full object-cover"></video>
+                <div id="loader" class="absolute inset-0 flex items-center justify-center bg-gray-900 z-10">
+                    <p class="text-sm animate-bounce text-blue-400">Starting Camera & AI Models...</p>
+                </div>
+            </div>
+
+            <button id="regBtn" disabled class="w-full bg-blue-600 hover:bg-blue-700 disabled:bg-slate-700 p-4 rounded-xl font-bold transition-all shadow-lg shadow-blue-500/20">
+                CAPTURE & SAVE FACE
+            </button>
+        </div>
+
+        <div class="bg-[#1e293b] p-6 rounded-3xl border border-slate-700 shadow-xl">
+            <h2 class="text-lg font-bold mb-4 text-green-300 italic tracking-wider">02. CLASS SCHEDULER</h2>
+            <div class="space-y-4">
+                <input type="text" id="subject" placeholder="Subject Name" class="w-full bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none focus:border-green-500">
+                <div class="grid grid-cols-2 gap-3">
+                    <input type="time" id="start" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none">
+                    <input type="time" id="end" class="bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none">
+                </div>
+                <input type="date" id="date" class="w-full bg-[#0f172a] border border-slate-700 p-3 rounded-xl outline-none">
+                <button id="schBtn" class="w-full bg-green-600 hover:bg-green-700 p-4 rounded-xl font-bold shadow-lg shadow-green-500/20 transition-all">
+                    SCHEDULE CLASS
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        const SUPABASE_URL = 'https://fgftcqpeylybltodifyq.supabase.co';
+        const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZnZnRjcXBleWx5Ymx0b2RpZnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NDE5NTMsImV4cCI6MjA4NTUxNzk1M30.gtNRDS3sXTalzGBMheR0E6rXqQsaODUnWEQdDEBDcBQ';
+        const supabaseClient = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        const video = document.getElementById('video');
+        const status = document.getElementById('status');
+
+        async function init() {
+            try {
+                // Models Path - Using relative path
+                await faceapi.nets.tinyFaceDetector.loadFromUri('./models');
+                await faceapi.nets.faceLandmark68Net.loadFromUri('./models');
+                await faceapi.nets.faceRecognitionNet.loadFromUri('./models');
+                
+                status.innerText = "● AI MODELS READY";
+                status.className = "text-xs font-bold px-3 py-1 rounded-full bg-green-500/20 text-green-500";
+                
+                const stream = await navigator.mediaDevices.getUserMedia({ video: {} });
+                video.srcObject = stream;
+                document.getElementById('loader').style.display = 'none';
+                document.getElementById('regBtn').disabled = false;
+            } catch (e) {
+                status.innerText = "● MODEL LOAD ERROR";
+                console.error(e);
+            }
+        }
+
+        document.getElementById('regBtn').onclick = async () => {
+            const name = document.getElementById('name').value;
+            const roll = document.getElementById('roll').value;
+            const branch = document.getElementById('branch').value;
+            const sem = document.getElementById('sem').value;
+
+            if(!name || !roll) return alert("Details bharo bhai!");
+
+            status.innerText = "ANALYZING FACE...";
+            const detection = await faceapi.detectSingleFace(video, new faceapi.TinyFaceDetectorOptions()).withFaceLandmarks().withFaceDescriptor();
+
+            if (detection) {
+                const { error } = await supabaseClient.from('profiles').insert([{ 
+                    name, 
+                    roll_number: roll, 
+                    branch, 
+                    semester: sem, 
+                    face_data: Array.from(detection.descriptor) 
+                }]);
+
+                if (!error) {
+                    alert("Student Enrolled!");
+                    location.reload();
+                } else {
+                    alert("DB Error: " + error.message);
+                }
+            } else {
+                alert("Face detect nahi hua!");
+            }
+            status.innerText = "● AI MODELS READY";
+        };
+
+        document.getElementById('schBtn').onclick = async () => {
+            const { error } = await supabaseClient.from('classes').insert([{ 
+                subject: document.getElementById('subject').value, 
+                start_time: document.getElementById('start').value, 
+                end_time: document.getElementById('end').value, 
+                class_date: document.getElementById('date').value 
+            }]);
+            if (!error) alert("Class Scheduled!");
+            else alert(error.message);
+        };
+
+        init();
+    </script>
+</body>
+</html>

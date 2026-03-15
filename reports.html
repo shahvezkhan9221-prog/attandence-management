@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Attendance Dashboard | GLA University</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;600;800&display=swap');
+        body { font-family: 'Outfit', sans-serif; background-color: #020617; }
+        .glass { background: rgba(30, 41, 59, 0.7); backdrop-filter: blur(12px); border: 1px solid rgba(255,255,255,0.1); }
+    </style>
+</head>
+<body class="text-slate-200 min-h-screen">
+
+    <nav class="glass sticky top-0 z-50 p-4 mb-8">
+        <div class="container mx-auto flex justify-between items-center">
+            <h1 class="text-2xl font-extrabold bg-gradient-to-r from-blue-400 to-emerald-400 bg-clip-text text-transparent">
+                GLA ATTENDANCE <span class="text-white font-light text-sm tracking-widest ml-2">REPORTS</span>
+            </h1>
+            <div class="flex gap-4">
+                <button onclick="window.location.reload()" class="text-xs bg-slate-800 hover:bg-slate-700 px-4 py-2 rounded-full border border-slate-700 transition">
+                    🔄 REFRESH
+                </button>
+            </div>
+        </div>
+    </nav>
+
+    <main class="container mx-auto px-6 pb-20">
+        
+        <div class="glass p-8 rounded-[2rem] mb-10">
+            <div class="flex flex-col md:flex-row gap-6 items-end">
+                <div class="flex-1 space-y-2">
+                    <label class="text-xs font-bold text-slate-400 uppercase tracking-widest ml-1">Select Scheduled Class</label>
+                    <select id="classPicker" class="w-full bg-slate-900 border border-slate-700 p-4 rounded-2xl outline-none focus:ring-2 focus:ring-blue-500 transition text-lg font-semibold text-blue-100">
+                        <option value="">Checking for classes...</option>
+                    </select>
+                </div>
+                <button id="genBtn" class="bg-blue-600 hover:bg-blue-700 text-white px-10 py-4 rounded-2xl font-bold shadow-xl shadow-blue-900/40 transition-all transform active:scale-95">
+                    GENERATE REPORT
+                </button>
+            </div>
+        </div>
+
+        <div id="statsRow" class="grid grid-cols-1 md:grid-cols-3 gap-6 mb-10 hidden">
+            <div class="glass p-6 rounded-3xl border-l-4 border-l-blue-500">
+                <p class="text-xs text-slate-400 font-bold uppercase">Total Students</p>
+                <h2 id="tCount" class="text-4xl font-black mt-2">0</h2>
+            </div>
+            <div class="glass p-6 rounded-3xl border-l-4 border-l-emerald-500">
+                <p class="text-xs text-emerald-400 font-bold uppercase">Present</p>
+                <h2 id="pCount" class="text-4xl font-black mt-2 text-emerald-400">0</h2>
+            </div>
+            <div class="glass p-6 rounded-3xl border-l-4 border-l-red-500">
+                <p class="text-xs text-red-400 font-bold uppercase">Absent</p>
+                <h2 id="aCount" class="text-4xl font-black mt-2 text-red-400">0</h2>
+            </div>
+        </div>
+
+        <div class="glass rounded-[2.5rem] overflow-hidden shadow-2xl">
+            <div class="overflow-x-auto">
+                <table class="w-full text-left border-collapse">
+                    <thead>
+                        <tr class="bg-slate-800/50 text-slate-400 text-[10px] uppercase font-black tracking-[0.2em]">
+                            <th class="p-6">Student Info</th>
+                            <th class="p-6">Branch & Sem</th>
+                            <th class="p-6">Timestamp</th>
+                            <th class="p-6 text-center">Final Status</th>
+                        </tr>
+                    </thead>
+                    <tbody id="tableBody" class="divide-y divide-slate-800">
+                        </tbody>
+                </table>
+            </div>
+            <div id="noData" class="p-20 text-center flex flex-col items-center gap-4">
+                <div class="text-5xl opacity-20">📊</div>
+                <p class="text-slate-500 font-medium italic">Select a class and click "Generate Report" to view results.</p>
+            </div>
+        </div>
+    </main>
+
+    <script type="module">
+        const S_URL = 'https://fgftcqpeylybltodifyq.supabase.co';
+        const S_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImZnZnRjcXBleWx5Ymx0b2RpZnlxIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njk5NDE5NTMsImV4cCI6MjA4NTUxNzk1M30.gtNRDS3sXTalzGBMheR0E6rXqQsaODUnWEQdDEBDcBQ';
+        const supabase = supabase.createClient(S_URL, S_KEY);
+
+        async function loadClasses() {
+            const { data } = await supabase.from('classes').select('*').order('class_date', { ascending: false });
+            const picker = document.getElementById('classPicker');
+            if (data && data.length > 0) {
+                picker.innerHTML = data.map(c => `<option value="${c.id}">${c.subject} | ${c.class_date} (${c.start_time})</option>`).join('');
+            } else {
+                picker.innerHTML = `<option value="">No classes found in DB</option>`;
+            }
+        }
+
+        document.getElementById('genBtn').onclick = async () => {
+            const cId = document.getElementById('classPicker').value;
+            if (!cId) return;
+
+            // 1. Get all students
+            const { data: students } = await supabase.from('profiles').select('*');
+            // 2. Get attendance for this class
+            const { data: attendance } = await supabase.from('attendance').select('*').eq('class_id', cId);
+
+            const attendanceMap = new Map(attendance.map(a => [a.student_id, a.marked_at]));
+            const tbody = document.getElementById('tableBody');
+            
+            let pCount = 0;
+            tbody.innerHTML = students.map(s => {
+                const markedTime = attendanceMap.get(s.id);
+                const isPresent = !!markedTime;
+                if(isPresent) pCount++;
+
+                return `
+                    <tr class="hover:bg-white/5 transition-colors">
+                        <td class="p-6">
+                            <p class="font-bold text-lg">${s.name}</p>
+                            <p class="text-xs text-blue-400 font-mono tracking-tighter uppercase">${s.roll_number}</p>
+                        </td>
+                        <td class="p-6">
+                            <p class="text-sm font-semibold">${s.branch || 'General'}</p>
+                            <p class="text-[10px] text-slate-500 uppercase font-bold">Sem: ${s.semester || 'N/A'}</p>
+                        </td>
+                        <td class="p-6 font-mono text-xs text-slate-400">
+                            ${isPresent ? new Date(markedTime).toLocaleTimeString() : '--:--:--'}
+                        </td>
+                        <td class="p-6 text-center">
+                            <span class="inline-block px-4 py-1.5 rounded-full text-[10px] font-black uppercase tracking-widest border ${isPresent ? 'bg-emerald-500/10 text-emerald-500 border-emerald-500/20' : 'bg-red-500/10 text-red-500 border-red-500/20'}">
+                                ${isPresent ? '✅ Present' : '❌ Absent'}
+                            </span>
+                        </td>
+                    </tr>
+                `;
+            }).join('');
+
+            // UI Updates
+            document.getElementById('statsRow').classList.remove('hidden');
+            document.getElementById('noData').classList.add('hidden');
+            document.getElementById('tCount').innerText = students.length;
+            document.getElementById('pCount').innerText = pCount;
+            document.getElementById('aCount').innerText = students.length - pCount;
+        };
+
+        loadClasses();
+    </script>
+</body>
+</html>
